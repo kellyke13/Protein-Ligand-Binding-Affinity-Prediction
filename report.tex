@@ -1,0 +1,503 @@
+\documentclass[11pt]{report}
+\usepackage{
+    amsmath, amsthm, amssymb, amsfonts, bbm, bm, booktabs, listings, enumitem, geometry,
+    titlesec, array, makecell, caption, subcaption, graphicx, float, hyperref,
+    mdframed, mathtools, wrapfig, xcolor, minted, pifont, multirow
+}
+\usepackage{cleveref} % put after hyperref!
+\geometry{margin=0.5in}
+\graphicspath{ {./imgs/} }
+\usemintedstyle{friendly}
+
+\numberwithin{equation}{section}
+\titleformat{\chapter}[hang]{\normalfont\Huge\bfseries}{\thechapter.}{0.65em}{}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{definition}{Definition}[section]
+\newtheorem{remark}{Remark}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{corollary}{Corollary}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{example}{Example}[section]
+\newtheorem{property}{Property}[section]
+\newtheorem{algorithm}{Algorithm}[section]
+
+\DeclareMathOperator{\Arg}{Arg} % Branch argument of complex numbers
+\DeclareMathOperator{\Var}{Var} % variance
+\DeclareMathOperator{\Cov}{Cov} % covariance
+\DeclareMathOperator{\corr}{corr} % correlation
+\DeclareMathOperator{\Int}{Int} % interior
+\DeclareMathOperator{\Ext}{Ext} % exterior
+\DeclareMathOperator{\Res}{Res} % residule
+\DeclareMathOperator*{\argmax}{arg\,max} % argmax
+\DeclareMathOperator*{\argmin}{arg\,min} % argmin
+
+\DeclarePairedDelimiter\ceil{\lceil}{\rceil} % ceiling
+\DeclarePairedDelimiter\floor{\lfloor}{\rfloor} % floor
+
+\DeclarePairedDelimiter\abs{\lvert}{\rvert}
+\DeclarePairedDelimiter\norm{\lVert}{\rVert}
+
+% Swap the definition of \abs* and \norm*, so that \abs
+% and \norm resizes the size of the brackets, and the
+% starred version does not.
+\makeatletter
+\let\oldabs\abs
+\def\abs{\@ifstar{\oldabs}{\oldabs*}}
+%
+\let\oldnorm\norm
+\def\norm{\@ifstar{\oldnorm}{\oldnorm*}}
+\makeatother
+
+\allowdisplaybreaks
+
+\title{Predicting Binding Affinity Using Pre-Computed Features}
+\author{Group 08: P104, P303, P677, P995}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+\chapter{Introduction}
+Our project goal is to identify the best model for predicting a molecule’s binding affinity to a protein using pre-computed features. The dataset includes 1024 binary (fps) features, 224 real-valued (embed) features, and one real-valued target variable (binding affinity). It is divided into a training set (975 molecules), a test set (109 molecules), and a private test set (73 molecules, binding affinity unknown). We will analyze the dataset, apply necessary preprocessing, and evaluate various models to determine the most suitable one.
+
+{\let\clearpage\relax \chapter{Exploratory Data Analysis}}
+\section{EDA for Fps}
+\subsection{Distribution for Number of Non-Zero Features per Observation}
+We begin with a summary of the training data. For fps features, we count the non-zero entries per observation and plot their distribution. As shown in \cref{fig:fps_summary}, each training sample has fewer than 100 non-zero values out of 1024 features, indicating high sparsity in the feature matrix.
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[width=0.8\textwidth]{imgs/fps_summary.png}
+    \caption{Distribution of the Number of Non-Zero Features for All Observations}
+    \label{fig:fps_summary}
+\end{figure}
+\subsection{Summary Statistics for Each Feature}
+We analyzed the distribution of each feature, calculating the proportion of non-zero observations per feature, shown in \cref{fig:fps_summary_h}. Most proportions fall within [0, 0.03], indicating an extremely imbalanced number of 0s and 1s. While many features are near zero (blue), a few are around 0.5 (white) or approach one (red/orange), highlighting the need for standardization in scale-sensitive methods like PCA. Additionally, 57 features are constant (all 0s or 1s) and may be removed via dimensionality reduction.
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[width=0.97\textwidth]{imgs/fps_summary_h.png}
+    \caption{Proportions of Non-Zero Observations for Each Fps Feature}
+    \label{fig:fps_summary_h}
+\end{figure}
+
+\subsection{Suitablility for Applying PCA}
+Before applying the dimension-reduction techniques, we also check the correlations between features. From \cref{fig:fps_corr}, we observe several highly correlated features (red or blue dots excluding diagonals). To address this, PCA may be applied to reduce multicollinearity.
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[width=0.9\textwidth]{imgs/fps_corr.png}
+    \caption{Correlation between All Fps Features}
+    \label{fig:fps_corr}
+\end{figure}
+Besides reducing multicollinearity, PCA helps address high dimensionality in our fps features. Since the number of features (p=1024) exceeds the sample size (n=975), some methods may suffer from interpolation. For instance, in linear regression without penalty terms, if $p>n$, $X^TX$ is not invertible and we cannot use $(X^TX)^{-1}X^Ty$ to derive optimized coefficients. PCA addresses this by retaining 95\% of the variance with only 410 principal components (PCs) in the fps dataset.
+
+\section{EDA for Embed Features}
+\subsection{Summary Statistics}
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[width=\textwidth]{embed_heatmap_summary_stats.png}
+    \caption{Heatmap for Selected Embed Summary Statistics}
+    \label{fig:embed_heat_stats}
+\end{figure}
+From \cref{fig:embed_heat_stats}, we observe that most features exhibit similar ranges and variability, with standard deviations and means clustering at relatively consistent levels. However, a subset of features (orange/red hues) demonstrates notably larger scales, indicating higher variability than the majority. This suggests that normalization is necessary before model training, particularly when applying PCA, as it is sensitive to differences in feature magnitudes.
+
+Additionally, as before, constant features will be removed as part of feature preprocessing to improve model efficiency.
+\subsection{Suitability for PCA}
+To explore feature relationships, we compute the correlation matrix and visualize it as a heatmap (\cref{fig:embed_heat_corr}). The presence of highly correlated features (deep red/blue areas) indicates potential redundancy, as some features convey overlapping information.
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[width=0.85\textwidth]{embed_correlation_heatmap.png}
+    \caption{Embed Feature Correlation Heatmap}
+    \label{fig:embed_heat_corr}
+\end{figure}
+Similar to the preprocessing for FPS, we will apply PCA to address the multicollinearity between features and reduce dimensionality.
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[scale=0.9]{embed_PCA.png}
+    \caption{Variance Explained by Components in PCA for Embed Data}
+    \label{fig:embed_PCA}
+\end{figure}
+As shown in the variance explained plot, \cref{fig:embed_PCA}, 93 out of 224 components can explain over 98\% of the total variance in the dataset. Therefore, we can replace the 224 features with 93 PCs to improve model efficiency without substantial information loss.
+
+\section{EDA for Binding Affinity}
+Since binding affinity is continuous, we visualize its distribution using a histogram with a kernel density estimate (KDE) (\cref{fig:target_dist}).
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[width=0.65\textwidth]{target_dist.png}
+    \caption{Distribution of Binding Affinity}
+    \label{fig:target_dist}
+\end{figure}
+The distribution is slightly left-skewed and unimodal, with a peak around 7.5-8, indicating most molecules tend to have binding affinity values within this range. Some potential outliers appear at two ends, particularly near 5 and 10, but are not extreme.
+
+As the distribution does not exhibit severe skewness or multiple modes, no transformation (e.g., log or Box-Cox) is needed for this target. Binding affinity values will be used as-is for modelling.
+
+{\let\clearpage\relax \chapter{Comparison and Construction of Models}}
+
+\section{Model Structure, Candidates and Fitting}
+\paragraph{General structure.}
+Putting together all aforementioned feature engineering and future modelling, the entire pipeline\footnote{Variations explained in PCA are varied by models and datasets.} before fitting the model is included in \Cref{tab:pipeline}:
+\begin{table}[htpb]
+    \centering
+    \caption{Pipeline of Pre-processing (executed line by line)}
+    \label{tab:pipeline}
+    \centering
+    \begin{tabular}{ccccccc}
+    \toprule
+     & Lasso & Ridge & KNN (Fps) & KNN (Embed) & RF & NN\\
+    \midrule
+    Remove Constant Features & \checkmark & \checkmark & \ding{55} & \checkmark & \checkmark & \checkmark\\
+    Standardisation & \checkmark & \checkmark & \ding{55} & \checkmark & \checkmark& \checkmark\\
+    PCA & \checkmark & \checkmark & \ding{55} & \checkmark & \checkmark & \checkmark\\
+    Box-Cox Transformation & \checkmark & \checkmark & \ding{55} & \ding{55} & \ding{55} & \ding{55}\\
+    \bottomrule
+    \end{tabular}
+\end{table} 
+For training and hyperparameter selection, we use 5-fold cross-validation to mitigate overfitting and better estimate model generalization performance by leveraging multiple subsets of the training data. Box-Cox transformations are applied only to models assuming normality.
+\paragraph{Candidate models.}
+We choose to fit four different regressors using the fps and embed features:
+\begin{enumerate}
+    \item \textbf{Regularized Linear Regression.} We consider the \textbf{Lasso} and \textbf{Ridge} regression, with L1 and L2 term respectively. The hyperparameter to tune is the regularization strength \(\alpha\) and the proportion of variance retained through PCA. For lasso regression, we tune \(\alpha\in(10^{-4},10)\) for fps dataset and \(\alpha\in(10^{-3},10^{-1})\) for embed dataset. For ridge regression, we tune \(\alpha\in(10^{-1},10^{4})\) for fps data and \(\alpha\in(150,200)\) for embed data.
+    
+        The range chosen reflects the large number of features (and hence regression coefficients), and the need for strong regularisation since L2 penalty does not remove features.
+    
+        The MSE curves for \(\alpha\) tuning are shown in \cref{fig:fps_lasso_mse-vs-alpha,fig:fps_ridge_mse-vs-alpha,fig:embed_lasso_mse-vs-alpha,fig:embed_ridge_mse-vs-alpha}. All four plots exhibit a characteristic U-shape, where the CV mean MSE is minimized at an intermediate value of \(\alpha\). When \(\alpha\) is too small, regularization is weak, allowing large coefficients and leading to high estimation error. Conversely, when \(\alpha\) is too large, both Lasso and Ridge overly shrink the coefficients. The optimal \(\alpha\) balances this trade-off between estimation and approximation error, minimizing overall risk. The selected parameters for each model and dataset are summarized in \cref{tab:linear-value}.
+        \begin{table}[htpb]
+            \centering
+            \caption{Optimal Hyperparameters for Linear Regressors on Fps and Embed Datasets}
+            \label{tab:linear-value}
+            \begin{tabular}{lccc}
+                \toprule
+                Model & Parameters & Fps & Embed \\
+                \midrule
+                \multirow{2}{*}{Lasso} 
+                & \(\alpha\)   & \(0.023\)    & \(0.011\) \\
+                & Variance Retained & \(95\%\) & \(98\%\)\\
+                \midrule
+                \multirow{2}{*}{Ridge} 
+                & \(\alpha\)  & \(885.867\)  & \(165.789\) \\
+                & Variance Retained & \(95\%\) & \(98\%\) \\
+                \bottomrule
+            \end{tabular}
+        \end{table}
+        \begin{figure}[htpb]
+            \centering
+            \begin{subfigure}[b]{0.49\textwidth}
+                \centering
+                \includegraphics[width=\textwidth]{fps_lasso_alpha.png}
+                \caption{Lasso Regression for Fps Feature: MSE vs. \(\alpha\)}
+                \label{fig:fps_lasso_mse-vs-alpha}
+            \end{subfigure}
+            \begin{subfigure}[b]{0.49\textwidth}
+                \centering
+                \includegraphics[width=\textwidth]{fps_ridge_alpha.png}
+                \caption{Ridge Regression for Fps Feature: MSE vs. \(\alpha\)}
+                \label{fig:fps_ridge_mse-vs-alpha}
+            \end{subfigure}
+            \begin{subfigure}[b]{0.48\textwidth}
+                \centering
+                \includegraphics[width=\textwidth]{embed_lasso_alpha.png}
+                \caption{Lasso Regression for Embed Feature: MSE vs. \(\alpha\)}
+                \label{fig:embed_lasso_mse-vs-alpha}
+            \end{subfigure}
+            \begin{subfigure}[b]{0.5\textwidth}
+                \centering
+                \includegraphics[width=\textwidth]{embed_ridge_alpha.png}
+                \caption{Ridge Regression for Embed Feature: MSE vs. \(\alpha\)}
+                \label{fig:embed_ridge_mse-vs-alpha}
+            \end{subfigure}
+            \caption{Linear Regression: MSE vs. \(\alpha\)}
+            \label{fig:linear_mse-vs-alpha}
+        \end{figure}
+    \item \textbf{\(K\)-Nearest Neighbors (KNN) Regressor.} KNN assumes that points close in feature space have similar target values. As it makes no normality assumption, we omit Box-Cox transformations.
+
+        For fps features, which are binary, the Hamming distance\footnote{The Hamming distance between two equal-length binary vectors is the proportion of disagreeing components in the two.} is a natural choice of dissimilarity. For embed features, which are continuous and often highly correlated, the standard Euclidean distance is used.
+    
+        The main hyperparameters are the number of neighbours K, whether to use uniform or distance-based weighting in the prediction, and the proportion of variance retained through PCA (embed features only, due to high correlations). The tuning results are shown in \cref{fig:embed_knn_k,fig:fps_knn_k}. The optimal parameters for each model and dataset are summarised in \cref{tab:k-value}.
+        \begin{table}[htpb]
+            \centering
+            \caption{Optimal Hyperparameters for KNN Model for Fps and Embed Dataset}
+            \label{tab:k-value}
+            \centering
+            \begin{tabular}{ccc}
+            \toprule
+            Parameters & Fps & Embed \\
+            \midrule
+            \(K\) & \(5\) & \(7\) \\
+            Weighting Method & Weighted Average & Weighted Average\\
+            Variance Retained & (Not Applied) & \(95\%\)\\
+            \bottomrule
+            \end{tabular}
+        \end{table}
+        \begin{figure}[htpb]
+            \centering
+            \begin{subfigure}[b]{0.49\textwidth}
+                \centering
+                \includegraphics[width=\textwidth]{fps_knn_k.png}
+                \caption{KNN for Fps Features}
+                \label{fig:fps_knn_k}
+            \end{subfigure}
+            \begin{subfigure}[b]{0.49\textwidth}
+                \centering
+                \includegraphics[width=\textwidth]{embed_knn_k.png}
+                \caption{KNN for Embed Features}
+                \label{fig:embed_knn_k}
+            \end{subfigure}
+            \caption{KNN: MSE vs Number of Neighbors \(K\)}
+            \label{fig:knn-par}
+        \end{figure}
+    \item \textbf{Random Forest (RF) Regressor.} For the RF model, we tune two main hyperparameters: the number of trees in the ensemble and the proportion of variance retained through PCA. The optimal settings for each dataset are reported in \cref{tab:rf-par}.
+        \begin{table}[htpb]
+            \centering
+            \caption{Optimal Hyperparameters for RF Models on FPS and Embed Datasets}
+            \label{tab:rf-par}
+            \centering
+            \begin{tabular}{ccc}
+            \toprule
+            Parameters & Fps & Embed \\
+            \midrule
+            Number of Trees & \(200\) & \(400\)\\
+            Variance Retained & \(85\%\) & \(90\%\) \\
+            \bottomrule
+            \end{tabular}
+        \end{table}
+    \item \textbf{Neural Network (NN).} Simple neural networks, i.e., Multilayer Perceptron (MLP), are used here. The model will be trained by stochastic gradient descent. To prevent overfitting, we will use early stopping.
+
+        Hyperparameters are the number of layers and units per layer, activation (ReLU or logistic), and proportion of variance retained through PCA. The optimal settings for each dataset are reported in \cref{tab:nn-par}.
+        \begin{table}[htpb]
+            \centering
+            \caption{Optimal Hyperparameters for NN Models on FPS and Embed Datasets}
+            \label{tab:nn-par}
+            \centering
+            \begin{tabular}{ccc}
+            \toprule
+            Parameters & Fps & Embed \\
+            \midrule
+            Number of Layers & \(2\) & \(1\) \\
+            Number of Layers & \(128, 128\) & \(64\)\\
+            Activation Function & Logistic & Logistic \\
+            Variance Retained & \(95\%\) & \(85\%\) \\
+            \bottomrule
+            \end{tabular}
+        \end{table}
+\end{enumerate}
+\section{Model Selection}
+The model is selected based on the CV MSE, model assumptions, interpretability and computation cost (i.e., fitting time, model evaluation time, and memory usage).
+\subsection{Model Performance}
+\Cref{fig:fps-mse} displays the mean CV MSE for each fps model, along with a $95\%$ confidence interval.
+\begin{figure}[htpb]
+    \centering \includegraphics[width=0.65\textwidth]{fps_mse.png}
+    \caption{Performance Comparison for fps Models}
+    \label{fig:fps-mse}
+\end{figure}
+We can see that KNN performs the best with the lowest MSE at \(0.627\), followed by Ridge Regression (MSE = \(0.768\)). Lasso, RF and Neural Network do not perform as well on the training set, all with high MSE of more than \(0.83\). From this, KNN is the most promising fps model.
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[width=0.65\textwidth]{embed_mse.png}
+    \caption{Performance Comparison for Embed Models}
+    \label{fig:embed-mse}
+\end{figure}
+
+For the embed model, according to \cref{fig:embed-mse}, Lasso, Ridge, Random Forest, and Neural Network models have similar performance, with MSE values more than \(0.83\). In contrast, KNN achieves the lowest MSE (\(0.764\)), outperforming all other models. Based on these results, KNN is the most promising embed model.
+
+\subsection{Model Assumptions and Computational Costs}
+\paragraph{Model assumptions and interpretability.}
+The linear regression models (Lasso and Ridge) rely on standard assumptions: linearity, independence of predictors, homoscedasticity, and normally distributed errors. In contrast, the other models, KNN and RF, make fewer statistical assumptions, which is generally better. KNN assumes that nearby observations in feature space have similar target values, while Random Forests make predictions based on recursive partitioning via decision trees.
+
+For interpretability, Lasso and Ridge are the most straightforward, providing direct insight into the relationship between features and the response through their coefficients. RF models offer limited interpretability through feature importance scores. KNN, as a non-parametric model, offers minimal interpretability beyond local similarity.
+\paragraph{Computational cost.}
+We now examine the computational cost to finalize model selection. Training and evaluation time for different models on two datasets are presented in \cref{fig:computational-cost}.
+\begin{figure}[htpb]
+    \centering
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{embed_computation_times.png}
+        \caption{Models on Embed Features}
+        \label{fig:embed-time}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{fps_computation_times.png}
+        \caption{Models on Fps Features}
+        \label{fig:fps-time}
+    \end{subfigure}
+    \caption{Training Time and Evaluation Time (ms) For Different Models}
+    \label{fig:computational-cost}
+\end{figure}
+Across both datasets, the computational cost trends remain consistent. Random Forest is the most time-consuming model to train, requiring around \(5000\) ms and more than \(10000\) ms for the embed and fps datasets, respectively. KNN, in contrast, has the shortest training time, taking only around \(14\) ms and \(10\) ms for embed and fps datasets, making it highly efficient.
+
+For evaluation time, the trend differs. On the embed dataset, KNN remains the fastest, taking only around \(3\) ms. However, on the fps dataset, KNN becomes the slowest (more than \(100\) ms), though not significantly. This is primarily due to the computation of the Hamming metric, which is computationally more expensive than Euclidean distance.
+
+The memory requirements for different models are summarized in \cref{tab:memory-usage}.
+\begin{table}[htpb]
+    \centering
+    \caption{Theoretical Memory Complexity for Each Model}
+    \label{tab:memory-usage}
+    \begin{tabular}{ccc}
+    \toprule
+    Model & Space Complexity & Memory Allocation \\
+    \midrule
+    Lasso/Ridge & \(\mathcal{O}\left(p\right)\) & Stores a vector of coefficients \\
+    KNN & \(\mathcal{O}\left(np\right)\) & Stores the full dataset for inference \\
+    Random Forest & \(\mathcal{O}\left(Tpd\right)\) & Stores multiple decision trees \\
+    NN (MLP) & \(\mathcal{O}\left(Lp\right)\) & Stores weights of hidden layers \\
+    \bottomrule
+    \end{tabular}\\
+    \footnotesize{* \(n\): dataset size, \(p\): feature size, \(T\): number of trees, \(d\): tree depth, \(L\): number of layers.}
+\end{table}
+Given the dataset size, KNN may become memory intensive for large-scale applications. However, in our setting, the trade-off in memory is reasonable given its superior predictive performance.
+\begin{table}[htpb]
+    \centering
+    \caption{Performance, Assumptions and Computational Cost of Each Model}
+    \label{tab:adv-disadv}
+    \centering
+    \begin{tabular}{cccccc}
+    \toprule
+    Model & Lasso & Ridge & KNN & RF & NN \\
+    \midrule
+    Performance (MSE) & Good & Good & Best & Good & Good\\
+    Assumptions & Many & Many & Minimal & Minimal & Minimal\\
+    Interpretable & Yes & Yes & No & Limited & No \\
+    Computational Cost (Fitting Time) & Good & Good & Best & Worst & Moderate\\
+    Computational Cost (Evaluation Time) & Good & Good & Moderate & Good & Good\\
+    Computational Cost (Memory Usage) & Good & Good & Moderate & Worst & Worst\\
+    \bottomrule
+    \end{tabular}
+\end{table}
+Considering all aforementioned model performance, assumptions, interpretability, and computation cost (as heuristically outlined in \cref{tab:adv-disadv}), we select the KNN as the final model for predicting binding affinity. The final model is formulated as follows.
+\begin{align*}
+    \hat{y}\left(\widetilde{x}\right)=\frac{\sum_{i\in\text{knn}\left(\widetilde{x}\right)}w_iy_i}{\sum_{i\in\text{knn}\left(\widetilde{x}\right)}w_i},\quad w_i=\frac{1}{D\left(\widetilde{x},\widetilde{x}_i\right)+\epsilon}
+\end{align*}
+where \(i\) is the index of \(k\) nearest neighbours of \(\widetilde{x}\) (\(5\) for fps data, \(7\) for embed data), \(\epsilon\) is a small constant to prevent division by zero, and the dissimilarity metric is given by
+\begin{align*}
+    D\left(u,v\right)=\begin{cases}
+        \frac{\sum_{j=1}^{p_{\text{fps}}}\mathbb{I}_{u_j\neq v_j}}{p_{\text{fps}}},&\text{for fps features, i.e., \(u,v\in\left\{0,1\right\}^{p_{\text{fps}}}\)};\\
+        \norm{u-v}_2^2,&\text{for embed features, i.e., \(u,v\in\mathbb{R}^{p_{\text{embed}}}\)}.
+    \end{cases}
+\end{align*}
+Note that \(\widetilde{x}\) is the data transformed after the aforementioned preprocessing as in \cref{tab:pipeline}.
+
+\section{Analysis of Performance}
+\subsection{Fps Dataset}
+\Cref{tab:fps-knn-metrics} shows the performances of the final KNN model for our FPS dataset. As we do not use the public test set when fitting our models, it is safe to use the test MSE as an estimator of the MSE on the new private dataset. CV MSE can also be used due to the nature of CV, where we generated independent test sets in each iteration (though the fold number may influence its accuracy). We can see from \cref{tab:fps-knn-metrics} that the test MSE (\(0.825\)) and MAE are higher compared to the CV MSE (\(0.627\)) and MAE, suggesting potential overfitting. Meanwhile, we can see from the True vs Predicted plot in \cref{fig:fps-knn-performance} that our predictions are generally close to the true values, though some of the variations in true binding affinity are left unexplained as indicated by the linear trend in the residual plot (right). The model works well for true binding affinity with a medium size, while systematically underestimating big binding affinity values and overestimating the small binding affinity values. This may be because we are not including all features that affect binding affinity in our model.
+\begin{table}[htpb]
+    \centering
+    \begin{subtable}[h]{0.45\textwidth}
+        \centering
+        \caption{Performance of KNN on Fps Datasets}
+        \label{tab:fps-knn-metrics}
+        \begin{tabular}{ccc}
+        \toprule
+        Metrics & Average across CV Test & Public Test \\
+        \midrule
+        MSE & 0.627 & 0.825\\
+        MAE & 0.594 & 0.744\\
+        \bottomrule
+        \end{tabular}
+    \end{subtable}
+    \hspace{3mm}
+    \begin{subtable}[h]{0.45\textwidth}
+        \centering
+        \caption{Performance of KNN on Embed Datasets}
+        \label{tab:embed-knn-metrics}
+        \begin{tabular}{ccc}
+        \toprule
+        Metrics & Average across CV Test & Public Test \\
+        \midrule
+        MSE & 0.764 & 0.746\\
+        MAE & 0.683 & 0.706\\
+        \bottomrule
+        \end{tabular}
+    \end{subtable}
+    \caption{KNN Model Performance on Fps and Embed Datasets}
+    \label{tab:fps-embed-performance}
+\end{table}
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[width=\textwidth]{fps_knn_performance.png}
+    \caption{KNN for Fps Features: Analysis of Performance}
+    \label{fig:fps-knn-performance}
+\end{figure}
+
+\subsection{Embed Dataset}
+According to \cref{tab:embed-knn-metrics}, the CV and test MSE values (0.764 vs. 0.746) and MAE values (0.683 vs. 0.706) are consistent, suggesting that overfitting is not a potential concern. Therefore, this embed KNN model is robust for making predictions.
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[width=\textwidth]{embed_knn_performance.png}
+    \caption{KNN for Embed Features: Analysis of Performance}
+    \label{fig:embed-knn-performance}
+\end{figure}
+Apart from MSE and MAE values, the True vs. Predicted plot (see \cref{fig:embed-knn-performance}) indicates that the model generally aligns well with the data, with all points lying close to the diagonal. However, the residual plot reveals a linear trend similar to the fps residual plot, indicating potential bias. The reason may be that some variances are left unexplained when only including embed features, and we may consider utilizing both fps and embed features to make predictions. 
+
+{\let\clearpage\relax \chapter{Final Model Performance and Predictions}}
+\section{Combining the Features}
+For the two distinct feature sets, we adopt a concatenation-based approach, enabling the model to leverage information from both representations simultaneously. The preprocessing steps remain consistent with the previous sections:
+\begin{align*}
+    \begin{rcases}
+        \begin{bmatrix}
+            \text{fps}_1\\
+            \vdots\\
+            \text{fps}_{1024}
+        \end{bmatrix}\xrightarrow{\hspace{7.5mm}}\text{Standardisation}\to\text{PCA}\xrightarrow[\text{Only for Linear Model}]{\text{Box-Cox Transformation}}\\
+        \begin{bmatrix}
+            \text{embed}_1\\
+            \vdots\\
+            \text{embed}_{224}
+        \end{bmatrix}\xrightarrow{\hspace{3mm}}\text{Standardisation}\to\text{PCA}\xrightarrow[\text{Only for Linear Model}]{\text{Box-Cox Transformation}}
+    \end{rcases}\xrightarrow{\text{Concatenate}}\text{Combined Data \(\widetilde{X}\)}.
+\end{align*}
+\section{Choice of Final Model}
+Since KNN performed best on both embed and fps features individually, we first applied it to the combined dataset. The best KNN model (via CV) achieves a CV MSE of approximately \(0.7\) -- better than on embed alone (\(\approx 0.764\)) but worse than on fps (\(\approx0.627\), but with overfitting). Moreover, several concerns arise when using KNN on the combined dataset:
+\begin{enumerate}
+\item After concatenating the two datasets, the feature dimension becomes significantly larger than the dataset size (\(224 + 1024 \gg 975\)). Even after PCA, some features may contribute less to predictive performance, yet they cannot be easily removed alone.
+\item The choice of distance metric in KNN becomes questionable. While Euclidean distance may work well within a single feature space, it may be inappropriate for a dataset combining two feature types (continuous embed features and binary fps features). The dissimilarity measure might no longer reflect the true relationships in the data.
+\end{enumerate}
+These concerns motivate the need for an alternative approach, one that incorporates stronger regularization and does not rely on potentially unreliable distance metrics. Elastic Net provides a suitable solution, as it balances L1 (sparsity) and L2 (ridge) penalties, allowing the model to handle high-dimensional data effectively. The elastic net is formulated as
+\begin{align*}
+    \hat{\beta}=\argmin_{\beta}\left\{\sum_{i=1}^{n}\norm{y-\widetilde{X}\beta}_2^2+\alpha\left[\left(1-\lambda\right)\norm{\beta}_2^2+\lambda\norm{\beta}_1\right]\right\}
+\end{align*}
+where \(\left(\widetilde{X}, y\right)\) is the concatenated dataset, \(\alpha\) and \(\lambda\) balance the strength of L1 and L2 penalty. In practice, the Elastic Net model achieves a CV MSE of \(0.675\), already outperforming the KNN model (\(0.692\)). Furthermore, as shown in \cref{tab:combined-elastic-scores}, the MSE on the public test set reaches \(0.683\), marking a notable improvement over the previous KNN models fitted on each dataset individually. This improvement suggests that the issue of overfitting has been mitigated.
+\begin{table}[htpb]
+    \centering
+    \caption{Performance of Elastic Net on Combined Dataset}
+    \label{tab:combined-elastic-scores}
+    \centering
+    \begin{tabular}{ccc}
+    \toprule
+    Mean MSE across CV Test & MSE on Public Test \\
+    \midrule
+    0.675 & 0.683\\
+    \bottomrule
+    \end{tabular}
+\end{table}
+This makes Elastic Net our final choice for predicting binding affinity. Additionally, the effect of regularisation is shown in \cref{fig:effect-reg}, compared to OLS, we noticed that the coefficients are largely shrunk or even removed from the model.
+\begin{figure}[htpb]
+    \centering
+    \includegraphics[width=0.9\textwidth]{combined_elastic-params.png}
+    \caption{Effect of Elastic Net Regularisation Compared to OLS}
+    \label{fig:effect-reg}
+\end{figure}
+\section{Expected Performance on Private Set}
+Finally, we analyze the expected performance on the private set. Since we don't have true labels, a reasonable estimate of expected performance is using the CV error distribution from training.
+\begin{align*}
+    \widehat{\text{MSE}}_{\text{private}}=\frac{1}{K}\sum_{k=1}^{K}\text{MSE}_k=0.675
+\end{align*}
+where \(K=5\) is the number of folds in CV, and the uncertainty can be estimated by a \(95\%\) confidence interval from CV
+\begin{align*}
+    \text{CI}=\widehat{\text{MSE}}_{\text{private}}\pm z_{0.025} \frac{\sigma}{\sqrt{K}}=\left[0.616, 0.735\right]
+\end{align*}
+where \(\sigma\) is the standard deviation of CV MSE.
+Meanwhile, as the fps and embed distributions are similar on private and public test sets, we can use public test MSE to estimate performance on the private set. The bootstrap CI (resampled 1000 times) for test MSE is $(0.499, 0.859)$, with a similar mean and a slightly bigger range to the CV MSE. These results suggest that the model exhibits consistently good performance, with stable CV and test MSEs aligning with each other. 
+
+\chapter{Conclusion}
+In this project, we explored multiple regression models to predict molecular binding affinity based on two sets of features, fps and embed. After preprocessing, model selection, and performance evaluation, a combined Elastic Net model provides the best balance between predictive accuracy and generalisability, which was used to obtain predictions on the private test set in a separate CSV file. It has good CV performance, interpretability, computational efficiency and no overfitting issues compared to other models. However, residual plots still show a linear trend, suggesting minor assumption violations. Future work could incorporate additional factors influencing binding affinity, or a combination of two dissimilarity metrics in KNN models.
+\appendix
+\chapter{Python Code Appendix}
+\inputminted[
+    linenos,
+    breaklines,
+    frame=single,
+    framesep=2mm,
+    baselinestretch=1.1,
+    ]{python}{code_appendix.py}
+
+\end{document}
